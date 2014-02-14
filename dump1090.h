@@ -168,6 +168,7 @@
 #define MODES_NET_OUTPUT_SBS_PORT   30003
 #define MODES_NET_INPUT_BEAST_PORT  30004
 #define MODES_NET_OUTPUT_BEAST_PORT 30005
+#define MODES_NET_OUTPUT_SBSM_PORT  30006
 #define MODES_NET_HTTP_PORT          8080
 #define MODES_CLIENT_BUF_SIZE  1024
 #define MODES_NET_SNDBUF_SIZE (1024*64)
@@ -249,6 +250,7 @@ struct {                             // Internal state
     struct client *clients[MODES_NET_MAX_FD]; // Our clients
     int            maxfd;                     // Greatest fd currently active
     int            sbsos;                     // SBS output listening socket
+    int            sbsmos;                    // Modified SBS output listening socket
     int            ros;                       // Raw output listening socket
     int            ris;                       // Raw input listening socket
     int            bos;                       // Beast output listening socket
@@ -274,6 +276,7 @@ struct {                             // Internal state
     int   net;                       // Enable networking
     int   net_only;                  // Enable just networking
     int   net_output_sbs_port;       // SBS output TCP port
+    int   net_output_sbsm_port;      // Modified SBS output TCP port    
     int   net_output_raw_size;       // Minimum Size of the output raw data
     int   net_output_raw_rate;       // Rate (in 64mS increments) of output raw data
     int   net_output_raw_rate_count; // Rate (in 64mS increments) of output raw data
@@ -318,6 +321,7 @@ struct {                             // Internal state
 							
     unsigned int stat_http_requests;
     unsigned int stat_sbs_connections;
+    unsigned int stat_sbsm_connections;
     unsigned int stat_raw_connections;
     unsigned int stat_beast_connections;
     unsigned int stat_out_of_phase;

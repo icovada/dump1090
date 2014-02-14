@@ -29,6 +29,7 @@
 //
 
 #include "dump1090.h"
+#include <sys/time.h>
 //
 // ============================= Networking =============================
 //
@@ -51,20 +52,21 @@ void modesInitNet(void) {
         char *descr;
         int *socket;
         int port;
-    } services[6] = {
+    } services[7] = {
         {"Raw TCP output", &Modes.ros, Modes.net_output_raw_port},
         {"Raw TCP input", &Modes.ris, Modes.net_input_raw_port},
         {"Beast TCP output", &Modes.bos, Modes.net_output_beast_port},
         {"Beast TCP input", &Modes.bis, Modes.net_input_beast_port},
         {"HTTP server", &Modes.https, Modes.net_http_port},
-        {"Basestation TCP output", &Modes.sbsos, Modes.net_output_sbs_port}
+        {"Basestation TCP output", &Modes.sbsos, Modes.net_output_sbs_port},
+        {"Modified Basestation TCP output", &Modes.sbsmos, Modes.net_output_sbsm_port}
     };
     int j;
 
     memset(Modes.clients,0,sizeof(Modes.clients));
     Modes.maxfd = -1;
 
-    for (j = 0; j < 6; j++) {
+    for (j = 0; j < 7; j++) {
         int s = anetTcpServer(Modes.aneterr, services[j].port, NULL);
         if (s == -1) {
             fprintf(stderr, "Error opening the listening port %d (%s): %s\n",
@@ -87,7 +89,7 @@ void modesAcceptClients(void) {
     int fd, port;
     unsigned int j;
     struct client *c;
-    int services[6];
+    int services[7];
 
     services[0] = Modes.ros;
     services[1] = Modes.ris;
@@ -95,6 +97,7 @@ void modesAcceptClients(void) {
     services[3] = Modes.bis;
     services[4] = Modes.https;
     services[5] = Modes.sbsos;
+    services[6] = Modes.sbsmos;
 
     for (j = 0; j < sizeof(services)/sizeof(int); j++) {
         fd = anetTcpAccept(Modes.aneterr, services[j], NULL, &port);
@@ -115,6 +118,7 @@ void modesAcceptClients(void) {
 
         if (Modes.maxfd < fd) Modes.maxfd = fd;
         if (services[j] == Modes.sbsos) Modes.stat_sbs_connections++;
+        if (services[j] == Modes.sbsmos) Modes.stat_sbsm_connections++;
         if (services[j] == Modes.ros)   Modes.stat_raw_connections++;
         if (services[j] == Modes.bos)   Modes.stat_beast_connections++;
 
@@ -133,6 +137,9 @@ void modesFreeClient(int fd) {
     close(fd);
     if (Modes.clients[fd]->service == Modes.sbsos) {
         if (Modes.stat_sbs_connections) Modes.stat_sbs_connections--;
+    }
+    else if (Modes.clients[fd]->service == Modes.sbsmos) {
+        if (Modes.stat_sbsm_connections) Modes.stat_sbsm_connections--;
     }
     else if (Modes.clients[fd]->service == Modes.ros) {
         if (Modes.stat_raw_connections) Modes.stat_raw_connections--;
@@ -401,14 +408,165 @@ void modesSendSBSOutput(struct modesMessage *mm) {
     p += sprintf(p, "\r\n");
     modesSendAllClients(Modes.sbsos, msg, p-msg);
 }
+
 //
 //=========================================================================
 //
+// Write Modified SBS output to TCP clients
+// The message structure mm->bFlags tells us what has been updated by this message
+//
+void modesSendSBSMOutput(struct modesMessage *mm) {
+    char msg[256], *p = msg;
+    uint32_t     offset;
+    struct timeb epocTime;
+    struct tm    stTime;
+    int          msgType;
+    struct timeval  tv;
+
+    //
+    // SBS BS style output checked against the following reference
+    // http://www.homepages.mcb.net/bones/SBS/Article/Barebones42_Socket_Data.htm - seems comprehensive
+    //
+
+    // Decide on the basic SBS Message Type
+    if        ((mm->msgtype ==  4) || (mm->msgtype == 20)) {
+        msgType = 5;
+    } else if ((mm->msgtype ==  5) || (mm->msgtype == 21)) {
+        msgType = 6;
+    } else if ((mm->msgtype ==  0) || (mm->msgtype == 16)) {
+        msgType = 7;
+    } else if  (mm->msgtype == 11) {
+        msgType = 8;
+    } else if ((mm->msgtype != 17) && (mm->msgtype != 18)) {
+        return;
+    } else if ((mm->metype >= 1) && (mm->metype <=  4)) {
+        msgType = 1;
+    } else if ((mm->metype >= 5) && (mm->metype <=  8)) {
+        if (mm->bFlags & MODES_ACFLAGS_LATLON_VALID)
+            {msgType = 2;}
+        else
+            {msgType = 7;}
+    } else if ((mm->metype >= 9) && (mm->metype <= 18)) {
+        if (mm->bFlags & MODES_ACFLAGS_LATLON_VALID)
+            {msgType = 3;}
+        else
+            {msgType = 7;}
+    } else if (mm->metype !=  19) {
+        return;
+    } else if ((mm->mesub == 1) || (mm->mesub == 2)) {
+        msgType = 4;
+    } else {
+        return;
+    }
+
+    // Fields 1 to 3: SBS message type and ICAO address of the aircraft
+    p += sprintf(p, "MSG,%d,%06X,", msgType, mm->addr); 
+
+    // Field 4 is the packet's generation time
+    if (mm->timestampMsg) {                                       // Make sure the records' timestamp is valid before outputing it
+        epocTime = Modes.stSystemTimeBlk;                         // This is the time of the start of the Block we're processing
+        offset   = (int) (mm->timestampMsg - Modes.timestampBlk); // This is the time (in 12Mhz ticks) into the Block
+        offset   = offset / 12000;                                // convert to milliseconds
+        epocTime.millitm += offset;                               // add on the offset time to the Block start time
+        if (epocTime.millitm > 999)                               // if we've caused an overflow into the next second...
+            {epocTime.millitm -= 1000; epocTime.time ++;}         //    ..correct the overflow
+        stTime   = *localtime(&epocTime.time);                    // convert the time to year, month  day, hours, min, sec
+        p += sprintf(p, "%02d:%02d:%02d.%03d,", stTime.tm_hour, stTime.tm_min, stTime.tm_sec, epocTime.millitm); 
+    } else {
+        p += sprintf(p, ",");
+    }  
+
+    // Field 5 is the current UTC epoch in microseconds
+    gettimeofday(&tv, NULL);
+    p += sprintf(p, "%ld.%06ld,", tv.tv_sec, tv.tv_usec);
+
+    // Field 6 is the callsign (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_CALLSIGN_VALID) {p += sprintf(p, ",%s", mm->flight);}
+    else                                           {p += sprintf(p, ",");}
+
+    // Field 7 is the altitude (if we have it) - force to zero if we're on the ground
+    if ((mm->bFlags & MODES_ACFLAGS_AOG_GROUND) == MODES_ACFLAGS_AOG_GROUND) {
+        p += sprintf(p, ",0");
+    } else if (mm->bFlags & MODES_ACFLAGS_ALTITUDE_VALID) {
+        p += sprintf(p, ",%d", mm->altitude);
+    } else {
+        p += sprintf(p, ",");
+    }
+
+    // Field 8 and 9 are the ground Speed and Heading (if we have them)
+    if (mm->bFlags & MODES_ACFLAGS_NSEWSPD_VALID) {p += sprintf(p, ",%d,%d", mm->velocity, mm->heading);}
+    else                                          {p += sprintf(p, ",,");}
+
+    // Fields 10 and 11 are the Lat/Lon (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_LATLON_VALID) {p += sprintf(p, ",%1.5f,%1.5f", mm->fLat, mm->fLon);}
+    else                                         {p += sprintf(p, ",,");}
+
+    // Field 12 is the VerticalRate (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_VERTRATE_VALID) {p += sprintf(p, ",%d", mm->vert_rate);}
+    else                                           {p += sprintf(p, ",");}
+
+    // Field 13 is  the Squawk (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_SQUAWK_VALID) {p += sprintf(p, ",%x", mm->modeA);}
+    else                                         {p += sprintf(p, ",");}
+
+    // Field 14 is the Squawk Changing Alert flag (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_FS_VALID) {
+        if ((mm->fs >= 2) && (mm->fs <= 4)) {
+            p += sprintf(p, ",-1");  
+        } else {    
+            p += sprintf(p, ",0");
+        }  
+    } else {
+        p += sprintf(p, ",");
+    }
+
+    // Field 15 is the Squawk Emergency flag (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_SQUAWK_VALID) {
+        if ((mm->modeA == 0x7500) || (mm->modeA == 0x7600) || (mm->modeA == 0x7700)) {
+            p += sprintf(p, ",-1");
+        } else {      
+            p += sprintf(p, ",0");
+        }
+    } else {
+        p += sprintf(p, ",");
+    }
+
+    // Field 16 is the Squawk Ident flag (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_FS_VALID) {
+        if ((mm->fs >= 4) && (mm->fs <= 5)) {
+            p += sprintf(p, ",-1");  
+        } else {    
+            p += sprintf(p, ",0");
+        }  
+    } else {
+        p += sprintf(p, ",");
+    }
+
+    // Field 17 is the OnTheGround flag (if we have it)
+    if (mm->bFlags & MODES_ACFLAGS_AOG_VALID) {
+        if (mm->bFlags & MODES_ACFLAGS_AOG) {
+            p += sprintf(p, ",-1");
+        } else {
+            p += sprintf(p, ",0");
+        }
+    } else {
+        p += sprintf(p, ",");
+    }
+
+    p += sprintf(p, "\r\n");
+    modesSendAllClients(Modes.sbsmos, msg, p-msg);
+}
+//
+//=========================================================================
+//
+
 void modesQueueOutput(struct modesMessage *mm) {
     if (Modes.stat_sbs_connections)   {modesSendSBSOutput(mm);}
+    if (Modes.stat_sbsm_connections)   {modesSendSBSMOutput(mm);}
     if (Modes.stat_beast_connections) {modesSendBeastOutput(mm);}
     if (Modes.stat_raw_connections)   {modesSendRawOutput(mm);}
 }
+
 //
 //=========================================================================
 //

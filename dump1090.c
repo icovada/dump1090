@@ -49,6 +49,7 @@ void modesInitConfig(void) {
     Modes.freq                    = MODES_DEFAULT_FREQ;
     Modes.check_crc               = 1;
     Modes.net_output_sbs_port     = MODES_NET_OUTPUT_SBS_PORT;
+    Modes.net_output_sbsm_port     = MODES_NET_OUTPUT_SBSM_PORT;
     Modes.net_output_raw_port     = MODES_NET_OUTPUT_RAW_PORT;
     Modes.net_input_raw_port      = MODES_NET_INPUT_RAW_PORT;
     Modes.net_output_beast_port   = MODES_NET_OUTPUT_BEAST_PORT;
@@ -360,6 +361,7 @@ void showHelp(void) {
 "--net-sbs-port <port>    TCP BaseStation output listen port (default: 30003)\n"
 "--net-bi-port <port>     TCP Beast input listen port  (default: 30004)\n"
 "--net-bo-port <port>     TCP Beast output listen port (default: 30005)\n"
+"--net-sbsm-port <port>   TCP Modified BaseStation output listen port (default: 30006)\n"
 "--net-ro-size <size>     TCP raw output minimum size (default: 0)\n"
 "--net-ro-rate <rate>     TCP raw output memory flush rate (default: 0)\n"
 "--lat <latitude>         Reference/receiver latitide for surface posn (opt)\n"
@@ -472,6 +474,8 @@ int main(int argc, char **argv) {
             Modes.net_http_port = atoi(argv[++j]);
         } else if (!strcmp(argv[j],"--net-sbs-port") && more) {
             Modes.net_output_sbs_port = atoi(argv[++j]);
+        } else if (!strcmp(argv[j],"--net-sbsm-port") && more) {
+            Modes.net_output_sbsm_port = atoi(argv[++j]);
         } else if (!strcmp(argv[j],"--onlyaddr")) {
             Modes.onlyaddr = 1;
         } else if (!strcmp(argv[j],"--metric")) {
