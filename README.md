@@ -168,6 +168,13 @@ similar to:
 
 This can be used to feed data to various sharing sites without the need to use another decoder.
 
+Port 30006
+---
+
+Clients are served modified SBS messages
+Fields 3,4,6 and 7 removed, receipt timestamp is outputted in Epoch microseconds to allow up to 300m triangulation, given an hypothetically 0us precise clock between three or more antennae
+
+
 Antenna
 ---
 
